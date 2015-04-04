@@ -1,0 +1,60 @@
+import skimage,glob
+
+default_augmentation_params = {
+    'zoom_range': (1.0, 1.1),
+    'rotation_range': (0, 360),
+    'shear_range': (0, 0),
+    'translation_range': (-4, 4),
+}
+
+def random_perturbation_transform(zoom_range, rotation_range, shear_range, translation_range, do_flip=False):
+    # random shift [-4, 4] - shift no longer needs to be integer!
+    shift_x = np.random.uniform(*translation_range)
+    shift_y = np.random.uniform(*translation_range)
+    translation = (shift_x, shift_y)
+
+    # random rotation [0, 360]
+    rotation = np.random.uniform(*rotation_range) # there is no post-augmentation, so full rotations here!
+
+    # random shear [0, 5]
+    shear = np.random.uniform(*shear_range)
+
+    # # flip
+    if do_flip and (np.random.randint(2) > 0): # flip half of the time
+        shear += 180
+        rotation += 180
+        # shear by 180 degrees is equivalent to rotation by 180 degrees + flip.
+        # So after that we rotate it another 180 degrees to get just the flip.
+
+    # random zoom [0.9, 1.1]
+    # zoom = np.random.uniform(*zoom_range)
+    log_zoom_range = [np.log(z) for z in zoom_range]
+    zoom = np.exp(np.random.uniform(*log_zoom_range)) # for a zoom factor this sampling approach makes more sense.
+    # the range should be multiplicatively symmetric, so [1/1.1, 1.1] instead of [0.9, 1.1] makes more sense.
+
+    return build_augmentation_transform(zoom, rotation, shear, translation)
+
+    ## TRANSFORMATIONS ##
+
+center_shift = np.array((IMAGE_HEIGHT, IMAGE_WIDTH)) / 2. - 0.5
+tform_center = skimage.transform.SimilarityTransform(translation=-center_shift)
+tform_uncenter = skimage.transform.SimilarityTransform(translation=center_shift)
+
+def build_augmentation_transform(zoom=1.0, rotation=0, shear=0, translation=(0, 0)):
+    tform_augment = skimage.transform.AffineTransform(scale=(1/zoom, 1/zoom), rotation=np.deg2rad(rotation), shear=np.deg2rad(shear), translation=translation)
+    tform = tform_center + tform_augment + tform_uncenter # shift to center, augment, shift back (for the rotation/shearing)
+    return tform
+
+def perturb_and_dscrop(img, ds_transforms, augmentation_params, target_sizes=None):
+    if target_sizes is None: # default to (53,53) for backwards compatibility
+        target_sizes = [(48, 48) for _ in xrange(len(ds_transforms))]
+
+    tform_augment = random_perturbation_transform(**augmentation_params)
+    # return [skimage.transform.warp(img, tform_ds + tform_augment, output_shape=target_size, mode='reflect').astype('float32') for tform_ds in ds_transforms]
+
+    result = []
+    for tform_ds, target_size in zip(ds_transforms, target_sizes):
+        result.append(fast_warp(img, tform_ds + tform_augment, output_shape=target_size, mode='reflect').astype('float32'))
+
+    return result
+
